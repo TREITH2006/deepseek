@@ -13,3 +13,5 @@ workspace/tasks/
 __pycache__/
 *.pyc
 deepseek/
+__pycache__/
+*.py[cod]
