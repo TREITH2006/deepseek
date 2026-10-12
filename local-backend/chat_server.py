@@ -27,12 +27,11 @@ def whisper_model():
     global WHISPER
     if WHISPER is None:
         from faster_whisper import WhisperModel
-        small=SPEECH_MODELS/'models--Systran--faster-whisper-small.en'/'snapshots'
-        base=SPEECH_MODELS/'models--Systran--faster-whisper-base'/'snapshots'
-        snapshots=small if small.exists() else base
-        cached=next((item for item in snapshots.iterdir() if item.is_dir()),None) if snapshots.exists() else None
-        if cached is None: raise RuntimeError('Whisper speech model is not installed. Run Install-Voice-Models.cmd.')
-        WHISPER=WhisperModel(str(cached),device='cpu',compute_type='int8')
+        distilled=SPEECH_MODELS/'faster-distil-whisper-large-v3'
+        if not (distilled/'model.bin').exists(): raise RuntimeError('Distil-Whisper speech model is not installed. Run Install-Voice-Models.cmd.')
+        cuda=pathlib.Path(os.environ.get('LOCALAPPDATA',''))/'Programs'/'Ollama'/'lib'/'ollama'/'cuda_v12'
+        if cuda.exists(): os.environ['PATH']=str(cuda)+os.pathsep+os.environ.get('PATH','')
+        WHISPER=WhisperModel(str(distilled),device='cuda',compute_type='int8_float16')
     return WHISPER
 def piper_voice():
     global PIPER
@@ -100,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
                     recording.write(audio);name=recording.name
                 try:
                     with SPEECH_LOCK:
-                        segments,info=whisper_model().transcribe(name,beam_size=3,vad_filter=True)
+                        segments,info=whisper_model().transcribe(name,language='en',condition_on_previous_text=False,beam_size=5,vad_filter=True)
                         text=' '.join(segment.text.strip() for segment in segments).strip()
                 finally: pathlib.Path(name).unlink(missing_ok=True)
                 if not text: raise ValueError('No speech was detected. Please try again closer to the microphone.')
