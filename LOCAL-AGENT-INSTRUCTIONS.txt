@@ -1,0 +1,73 @@
+LOCAL QWEN + OPENCLAW AGENT
+
+Launch: double-click Start-Local-Agent.cmd in this outputs folder.
+Open http://127.0.0.1:8765/ and refresh an older DeepSeek tab.
+Choose "Agent: browser, workspace and Notepad", enter a task, and Send.
+Choose Chat for normal questions or local document summaries.
+Stop: double-click Stop-Local-Agent.cmd. It stops this setup's agent/browser/chat and unloads Qwen.
+
+Example browser task:
+Open https://www.wikipedia.org/ in the openclaw profile. Use a role snapshot,
+type solar energy into the search textbox using its ref, press Enter, and
+report the article heading. Then save the result as a NEW file solar-note.txt.
+
+Example India-news task:
+Today's top 5 news in India, checked across five major newspaper companies.
+This routes to one bounded visible-browser check of The Hindu, The Indian Express,
+Hindustan Times, Times of India and Deccan Herald. It reports missing headings honestly.
+
+Example coding task:
+Save sum-squares.py with Python code to print the sum of squares from 1 to 10.
+Run it with workstation run_python and report the real stdout.
+
+Example desktop task:
+Open solar-result.txt in Notepad using workstation notepad_show and verify its editor text.
+
+Generated files: openclaw/workspace/tasks (inside this outputs folder).
+Use simple new filenames. Existing files are never overwritten by the workstation tool.
+Logs: openclaw/workstation-actions.jsonl; gateway.out.log; gateway.err.log;
+web-task-results/*.json. OpenClaw also stores browser tool transcripts in its local agent database.
+
+Verified on this computer:
+- Qwen 3.5 4B Q4_K_M downloaded and native tool calling passed.
+- Real Wikipedia search-field typing and submission passed; article navigation/extraction passed.
+- Research file saved; Python program executed with stdout 385 and exit code 0.
+- Windows Notepad opened generated text; editor contents verified.
+- Standalone task endpoint saved launch-check.txt and verified it in Notepad.
+- 32,768-token context loaded: model VRAM about 4.20 GB; sampled total GPU usage
+  up to 5,958 MiB (6.25 GB decimal), below the requested 7 GB ceiling.
+- DeepSeek R1 8B removed from both model stores, including its large weights.
+- Qwen copied into the original Ollama store as well as the dedicated setup store.
+
+Boundaries and limitations:
+- Local inference only; no API subscriptions or keys. Browsing still uses the internet.
+- 16 actual tool calls per run, 180-second agent timeout, 10-second Python timeout,
+  20-second workstation operation timeout. The page waits at most 210 seconds.
+- GPU memory is checked before each tool call; actions stop if total memory is over
+  7,000,000,000 bytes. These are measured samples, not a guaranteed peak under all future tasks.
+- Text/DOM operation with a visible Windows pointer adapter for click and typing targets.
+- Public HTTPS domains are supported without one-by-one configuration. Private/local network
+  destinations and direct IP URLs remain blocked.
+- Windows app support currently covers Notepad. It does not control every Windows application.
+- Coding tool runs limited Python scripts with approved imports and methods. It is not a general
+  terminal or an operating-system security sandbox; arbitrary shell access is not enabled.
+- Small models can make incorrect tool calls or malformed tool syntax. A retry may be needed;
+  success is not guaranteed for every task. Check the action logs and actual generated files.
+- Stop before purchases, external messages, personal-data deletion, login credentials or OTP entry.
+- The local page's visible Send/selector interaction could not be re-verified by the Codex browser
+  tool because a saved permission blocks that page. Its backend Agent path and syntax passed.
+
+Independence from ChatGPT/Codex:
+The launchers use installed Ollama, system Node.js 24, and system Python 3.13 with
+local-agent/standalone-venv. They do not use Codex's bundled runtimes or a paid API.
+Keep this entire outputs folder and the installed Node/Python/Ollama programs.
+Uninstalling ChatGPT/Codex must not delete your Documents/Codex output files.
+Old experimental local-agent/venv and Browser Use scripts are not used by these launchers.
+
+Compatibility repair:
+OpenClaw 2026.10.2's local Chromium engine skipped Playwright while strict navigation
+required redirect inspection. Its registry was changed to use Playwright for local-managed
+Chromium, retaining SSRF checks. Original file: openclaw/compat/registry-original.mjs.
+Updating/reinstalling OpenClaw may overwrite this repair and requires re-testing.
+License: OpenClaw and custom tools MIT; Qwen Apache 2.0.
+
