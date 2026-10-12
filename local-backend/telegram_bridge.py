@@ -73,6 +73,15 @@ def main():
                 if str(message.get('chat',{}).get('id'))!=CHAT_ID:continue
                 task=(message.get('text') or '').strip()
                 if not task:send('Send a text task. Voice notes are not enabled in this bridge yet.');continue
+                if task.lower()=='/start':
+                    send('Local PC agent is connected. Send a task in plain language. Coding tasks return a summary, PDF report, and ZIP of created or changed files.')
+                    continue
+                if task.lower()=='/status':
+                    try:
+                        with urllib.request.urlopen('http://127.0.0.1:8765/api/metrics',timeout=5) as response:metrics=json.load(response)
+                        send(f"Local backend: {metrics['backend']}. CPU {metrics['cpu_percent']}%, RAM {metrics['ram_percent']}%, GPU memory {metrics.get('gpu_used_mb')} MB.")
+                    except Exception:send('The local backend is not reachable. Start the local agent on the PC.')
+                    continue
                 send('Task accepted by the local agent. I will send the verified result when it finishes.')
                 try:
                     _,before=workspace_snapshot();result=run_agent(task);send(result)
