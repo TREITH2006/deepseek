@@ -2,6 +2,8 @@
 
 This repository contains a Vercel-ready static frontend and the source for its local Windows companion. Ollama, OpenClaw, Qwen, browser control, development commands and Windows application control remain on the user's PC.
 
+The frontend also supports local voice interaction. Press **Start talking**, speak a task, then press **Stop and run**. Faster-Whisper transcribes the recording on the PC, the existing bounded agent executes it, live progress remains visible, and Piper reads the final result aloud. Audio is limited to 60 seconds and is not retained.
+
 ## Start the installed backend on this PC
 
 ```powershell
@@ -22,6 +24,7 @@ After deployment:
 2. Keep **Local backend URL** set to `http://127.0.0.1:8765`.
 3. Paste the local pairing token.
 4. Select **Connect local PC**.
+5. Allow microphone access when using **Start talking**.
 
 ## Stop the backend
 

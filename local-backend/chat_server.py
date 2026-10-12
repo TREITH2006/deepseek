@@ -1,5 +1,5 @@
 """Local-only chat proxy; no external dependencies, keys, persistence or tools."""
-import json, os, pathlib, secrets, subprocess, tempfile, threading, time, urllib.error, urllib.request, urllib.parse, uuid, shutil
+import base64, io, json, os, pathlib, secrets, subprocess, tempfile, threading, time, urllib.error, urllib.request, urllib.parse, uuid, shutil, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from documents_local import extract_document
 ROOT=pathlib.Path(__file__).resolve().parent
@@ -8,6 +8,10 @@ ADDRESS=('127.0.0.1',8765)
 LOCK=threading.Lock()
 TASKS={}
 TASKS_LOCK=threading.Lock()
+SPEECH_LOCK=threading.Lock()
+SPEECH_MODELS=pathlib.Path(os.environ.get('AGENT_SPEECH_MODELS',ROOT/'speech-models'))
+WHISPER=None
+PIPER=None
 TOKEN_FILE=ROOT/'pairing-token.txt'
 if not TOKEN_FILE.exists(): TOKEN_FILE.write_text(secrets.token_urlsafe(32),encoding='utf-8')
 PAIRING_TOKEN=TOKEN_FILE.read_text(encoding='utf-8').strip()
@@ -19,6 +23,21 @@ def cross_origin_allowed(origin):
     except Exception:return False
 def request(path,data=None,timeout=3):
     return urllib.request.urlopen(urllib.request.Request(OLLAMA+path,data=json.dumps(data).encode() if data is not None else None,headers={'Content-Type':'application/json'}),timeout=timeout)
+def whisper_model():
+    global WHISPER
+    if WHISPER is None:
+        from faster_whisper import WhisperModel
+        snapshots=SPEECH_MODELS/'models--Systran--faster-whisper-base'/'snapshots'
+        cached=next((item for item in snapshots.iterdir() if item.is_dir()),None) if snapshots.exists() else None
+        if cached is None: raise RuntimeError('Whisper base model is not installed. Run Install-Voice-Models.cmd.')
+        WHISPER=WhisperModel(str(cached),device='cpu',compute_type='int8')
+    return WHISPER
+def piper_voice():
+    global PIPER
+    if PIPER is None:
+        from piper import PiperVoice
+        PIPER=PiperVoice.load(SPEECH_MODELS/'en_US-lessac-medium.onnx')
+    return PIPER
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass  # do not log question text
     def end_headers(self):
@@ -47,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
         self.path=parts.path
         if self.path=='/':
             data=(ROOT/'chat.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'");self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
-        elif self.path=='/health': self.send_json(200,{'model':'qwen3.5:4b','local':True,'busy':LOCK.locked(),'document_formats':['txt','md','pdf','docx']})
+        elif self.path=='/health': self.send_json(200,{'model':'qwen3.5:4b','local':True,'busy':LOCK.locked(),'voice':True,'document_formats':['txt','md','pdf','docx']})
         elif self.path=='/chat.js':
             data=(ROOT/'chat.js').read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
         elif self.path=='/api/agent/status':
@@ -58,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
         else: self.send_json(404,{'error':'Not found'})
     def do_POST(self):
         if not self.allowed() or not self.authorized(): return self.send_json(403,{'error':'This frontend is not paired with the local agent'})
-        if self.path not in {'/api/chat','/api/document','/api/agent'}: return self.send_json(404,{'error':'Not found'})
+        if self.path not in {'/api/chat','/api/document','/api/agent','/api/transcribe','/api/speak'}: return self.send_json(404,{'error':'Not found'})
         if self.path=='/api/document':
             try:
                 self.connection.settimeout(15)
@@ -67,6 +86,35 @@ class Handler(BaseHTTPRequestHandler):
                 result=extract_document(json.loads(self.rfile.read(length)))
                 return self.send_json(200,result)
             except Exception as error: return self.send_json(400,{'error':str(error)})
+        if self.path=='/api/transcribe':
+            try:
+                self.connection.settimeout(45)
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=12*1024*1024: raise ValueError('Voice recording is too large. Keep it under 60 seconds.')
+                body=json.loads(self.rfile.read(length));audio=base64.b64decode(body.get('base64',''),validate=True)
+                if not 1000<=len(audio)<=10*1024*1024: raise ValueError('No usable voice recording was received.')
+                mime=str(body.get('mime',''));suffix='.webm' if 'webm' in mime else '.ogg' if 'ogg' in mime else '.wav'
+                with tempfile.NamedTemporaryFile(suffix=suffix,delete=False) as recording:
+                    recording.write(audio);name=recording.name
+                try:
+                    with SPEECH_LOCK:
+                        segments,info=whisper_model().transcribe(name,beam_size=3,vad_filter=True)
+                        text=' '.join(segment.text.strip() for segment in segments).strip()
+                finally: pathlib.Path(name).unlink(missing_ok=True)
+                if not text: raise ValueError('No speech was detected. Please try again closer to the microphone.')
+                return self.send_json(200,{'text':text,'language':info.language})
+            except Exception as error: return self.send_json(400,{'error':'Local transcription failed: '+str(error)[:240]})
+        if self.path=='/api/speak':
+            try:
+                self.connection.settimeout(45)
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=12000: raise ValueError('Text is too large')
+                text=str(json.loads(self.rfile.read(length)).get('text','')).strip()[:1800]
+                if not text: raise ValueError('No text to speak')
+                audio=io.BytesIO()
+                with SPEECH_LOCK, wave.open(audio,'wb') as wav_file: piper_voice().synthesize_wav(text,wav_file)
+                data=audio.getvalue();self.send_response(200);self.send_header('Content-Type','audio/wav');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data);return
+            except Exception as error: return self.send_json(400,{'error':'Local speech failed: '+str(error)[:240]})
         try:
             self.connection.settimeout(15)
             length=int(self.headers.get('Content-Length','0'))
