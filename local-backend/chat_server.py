@@ -218,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
                         if current.get('stopped'): raise RuntimeError('Task stopped by user')
                         if not current.get('paused'):
                             metrics=system_metrics()
-                            over_hard_limit=metrics['ram_percent']>=95 or (metrics['gpu_used_mb'] is not None and metrics['gpu_used_mb']>7168)
+                            over_hard_limit=psutil.virtual_memory().available<384*1024*1024 or (metrics['gpu_used_mb'] is not None and metrics['gpu_used_mb']>7168)
                             if metrics['cpu_percent']>=98: high_cpu_since=high_cpu_since or time.monotonic()
                             else: high_cpu_since=None
                             if over_hard_limit or (high_cpu_since and time.monotonic()-high_cpu_since>=10):
