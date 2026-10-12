@@ -1,11 +1,16 @@
 """Local Telegram-to-OpenClaw bridge. Secrets remain in local files. MIT."""
-import json, pathlib, textwrap, time, urllib.parse, urllib.request, uuid, zipfile
+import json, pathlib, socket, textwrap, time, urllib.parse, urllib.request, uuid, zipfile
 
 ROOT=pathlib.Path(__file__).resolve().parent
 TOKEN=(ROOT/'telegram-token.txt').read_text(encoding='utf-8').strip()
 CHAT_ID=(ROOT/'telegram-chat-id.txt').read_text(encoding='utf-8').strip()
 OFFSET_FILE=ROOT/'telegram-offset.txt'
 API=f'https://api.telegram.org/bot{TOKEN}/'
+_getaddrinfo=socket.getaddrinfo
+def _ipv4_only(host,port,*args,**kwargs):
+    answers=_getaddrinfo(host,port,*args,**kwargs);ipv4=[answer for answer in answers if answer[0]==socket.AF_INET]
+    return ipv4 or answers
+socket.getaddrinfo=_ipv4_only
 
 def telegram(method,data=None,timeout=70):
     body=urllib.parse.urlencode(data or {}).encode()
