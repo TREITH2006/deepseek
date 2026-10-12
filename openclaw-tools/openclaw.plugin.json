@@ -1,0 +1,1 @@
+{"id":"local-workstation","name":"Local workstation tools","description":"Bounded coding workspace, VS Code and Notepad desktop control, and visible Indian-news browsing.","activation":{"onStartup":true},"contracts":{"tools":["workstation","desktop","news_digest"]},"configSchema":{"type":"object","additionalProperties":false,"properties":{}}}
