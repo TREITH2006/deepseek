@@ -1,7 +1,16 @@
 """MIT licensed local helper. Deliberately limits generated code and file scope."""
-import ast, json, os, pathlib, shutil, subprocess, sys, time
+import ast, ctypes, json, os, pathlib, shutil, subprocess, sys, time
+from ctypes import wintypes
 ROOT=pathlib.Path(__file__).resolve().parents[1]/'workspace'/'tasks'
 ROOT.mkdir(parents=True,exist_ok=True)
+
+def move_pointer(rect):
+    target=(int((rect.left+rect.right)/2),int((rect.top+rect.bottom)/2))
+    point=wintypes.POINT();user32=ctypes.windll.user32;user32.GetCursorPos(ctypes.byref(point));start=(point.x,point.y)
+    for step in range(1,61):
+        t=step/60;t=t*t*(3-2*t)
+        user32.SetCursorPos(round(start[0]+(target[0]-start[0])*t),round(start[1]+(target[1]-start[1])*t));time.sleep(.02)
+    time.sleep(.3)
 a=json.load(sys.stdin)
 action=a['action']
 name=a.get('filename','')
@@ -50,6 +59,7 @@ elif action=='notepad_show':
     edits=win.descendants(control_type='Edit') or win.descendants(control_type='Document')
     if not edits: raise RuntimeError('Notepad editor unavailable')
     editor=edits[0]
+    move_pointer(editor.rectangle())
     try: text=editor.get_value()
     except Exception:
         try: text=editor.iface_text.DocumentRange.GetText(-1)
@@ -70,7 +80,16 @@ elif action=='vscode_show':
     if not p.exists(): raise ValueError('Create the file or project before opening it')
     code=shutil.which('code.cmd') or shutil.which('code') or pathlib.Path(os.environ.get('LOCALAPPDATA',''))/'Programs'/'Microsoft VS Code'/'bin'/'code.cmd'
     if not pathlib.Path(code).exists(): raise ValueError('VS Code command is not installed')
+    from pywinauto import Desktop
+    before={w.handle for w in Desktop(backend='uia').windows()}
     subprocess.Popen([str(code),'--new-window',str(p)],cwd=ROOT)
-    result={'opened_in_vscode':str(p),'exists':True}
+    win=None
+    for _ in range(40):
+        candidates=[w for w in Desktop(backend='uia').windows() if w.handle not in before and w.class_name()=='Chrome_WidgetWin_1' and 'visual studio code' in w.window_text().lower()]
+        if candidates: win=candidates[0];break
+        time.sleep(.25)
+    if win is not None:
+        win.restore();win.set_focus();time.sleep(.3);move_pointer(win.rectangle())
+    result={'opened_in_vscode':str(p),'exists':True,'visible_pointer_moved':win is not None}
 else: raise ValueError('Unsupported action')
 print(json.dumps(result,ensure_ascii=False))
