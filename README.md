@@ -36,3 +36,13 @@ cd "C:\Users\adi86\Documents\Codex\2026-10-12\wha\outputs"
 ## Security
 
 Never commit the pairing token, model weights, virtual environments, browser profiles, cookies, logs or task workspaces. The local backend accepts paired requests only from HTTPS `*.vercel.app` origins or explicitly configured origins. Sensitive actions remain blocked by the local tools.
+# Telegram bridge
+
+The optional Telegram bridge runs on this PC and sends text tasks through the same local OpenClaw agent. Coding tasks return the structured result, a PDF report, and a ZIP containing files created or changed by that task.
+
+1. Revoke any bot token that was pasted into a chat or shared elsewhere.
+2. Generate a replacement token and find your numeric Telegram chat ID.
+3. Run `Set-Telegram-Bridge.ps1` locally and enter both values at its private prompts.
+4. Restart with `Start-Local-Agent.cmd`.
+
+The token, chat ID, update offset, task logs, and generated result files stay local and are excluded from Git.

@@ -1,4 +1,7 @@
 pairing-token.txt
+telegram-token.txt
+telegram-chat-id.txt
+telegram-offset.txt
 .venv/
 venv/
 node_modules/
