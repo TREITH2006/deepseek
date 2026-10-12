@@ -27,9 +27,11 @@ def whisper_model():
     global WHISPER
     if WHISPER is None:
         from faster_whisper import WhisperModel
-        snapshots=SPEECH_MODELS/'models--Systran--faster-whisper-base'/'snapshots'
+        small=SPEECH_MODELS/'models--Systran--faster-whisper-small.en'/'snapshots'
+        base=SPEECH_MODELS/'models--Systran--faster-whisper-base'/'snapshots'
+        snapshots=small if small.exists() else base
         cached=next((item for item in snapshots.iterdir() if item.is_dir()),None) if snapshots.exists() else None
-        if cached is None: raise RuntimeError('Whisper base model is not installed. Run Install-Voice-Models.cmd.')
+        if cached is None: raise RuntimeError('Whisper speech model is not installed. Run Install-Voice-Models.cmd.')
         WHISPER=WhisperModel(str(cached),device='cpu',compute_type='int8')
     return WHISPER
 def piper_voice():
