@@ -1,5 +1,5 @@
 """Local-only chat proxy; no external dependencies, keys, persistence or tools."""
-import base64, gc, io, json, os, pathlib, re, secrets, subprocess, tempfile, threading, time, urllib.error, urllib.request, urllib.parse, uuid, shutil, wave
+import base64, gc, io, json, os, pathlib, re, secrets, subprocess, tempfile, threading, time, urllib.error, urllib.request, urllib.parse, uuid, shutil, wave, psutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from documents_local import extract_document
 ROOT=pathlib.Path(__file__).resolve().parent
@@ -7,6 +7,7 @@ OLLAMA='http://127.0.0.1:11439'
 ADDRESS=('127.0.0.1',8765)
 LOCK=threading.Lock()
 TASKS={}
+TASK_PROCS={}
 TASKS_LOCK=threading.Lock()
 SPEECH_LOCK=threading.Lock()
 SPEECH_MODELS=pathlib.Path(os.environ.get('AGENT_SPEECH_MODELS',ROOT/'speech-models'))
@@ -15,6 +16,7 @@ PIPER=None
 TOKEN_FILE=ROOT/'pairing-token.txt'
 if not TOKEN_FILE.exists(): TOKEN_FILE.write_text(secrets.token_urlsafe(32),encoding='utf-8')
 PAIRING_TOKEN=TOKEN_FILE.read_text(encoding='utf-8').strip()
+STARTED_AT=time.time()
 def cross_origin_allowed(origin):
     try:
         value=urllib.parse.urlsplit(origin)
@@ -48,6 +50,43 @@ def tools_for_task(task):
     if any(word in value for word in ('code','python','javascript','node','npm','git','file','folder','project','vs code','vscode','terminal','run it')): tools.append('workstation')
     if any(word in value for word in ('vs code','vscode','notepad','calculator','paint','excel','word','powerpoint','file explorer','windows app','mouse','keyboard')): tools.append('desktop')
     return tools[:2] or ['workstation']
+def system_metrics():
+    vm=psutil.virtual_memory();gpu_used=gpu_total=gpu_load=None
+    try:
+        raw=subprocess.run(['nvidia-smi','--query-gpu=memory.used,memory.total,utilization.gpu','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=2,creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip().splitlines()[0]
+        gpu_used,gpu_total,gpu_load=[int(value.strip()) for value in raw.split(',')]
+    except Exception: pass
+    model_loaded=False
+    try:
+        with request('/api/ps',timeout=1) as response: model_loaded=any(model.get('name','').startswith('qwen3.5:4b') for model in json.load(response).get('models',[]))
+    except Exception: pass
+    return {'cpu_percent':round(psutil.cpu_percent(),1),'ram_percent':round(vm.percent,1),'ram_used_gb':round((vm.total-vm.available)/1073741824,1),'ram_total_gb':round(vm.total/1073741824,1),'gpu_used_mb':gpu_used,'gpu_total_mb':gpu_total,'gpu_percent':gpu_load,'backend':'busy' if LOCK.locked() else 'ready','qwen_loaded':model_loaded,'speech_loaded':WHISPER is not None,'uptime_seconds':round(time.time()-STARTED_AT)}
+def process_tree(proc):
+    try:
+        parent=psutil.Process(proc.pid);return parent.children(recursive=True)+[parent]
+    except Exception:return []
+def control_task(task_id,action):
+    with TASKS_LOCK:
+        task=TASKS.get(task_id);proc=TASK_PROCS.get(task_id)
+    if not task or not proc or proc.poll() is not None: raise ValueError('No running task was found')
+    processes=process_tree(proc)
+    if action=='pause':
+        for item in reversed(processes):
+            try:item.suspend()
+            except Exception:pass
+        with TASKS_LOCK: TASKS[task_id].update(status='Paused by user',step='Paused',active_tool='None',paused=True)
+    elif action=='resume':
+        for item in processes:
+            try:item.resume()
+            except Exception:pass
+        with TASKS_LOCK: TASKS[task_id].update(status='Task resumed',step='Resuming',active_tool='OpenClaw',paused=False)
+    elif action=='stop':
+        for item in reversed(processes):
+            try:item.terminate()
+            except Exception:pass
+        with TASKS_LOCK: TASKS[task_id].update(status='Stopped by user',step='Stopped',active_tool='None',done=True,stopped=True)
+    else: raise ValueError('Action must be pause, resume, or stop')
+    return dict(TASKS[task_id])
 def piper_voice():
     global PIPER
     if PIPER is None:
@@ -83,17 +122,24 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/':
             data=(ROOT/'chat.html').read_bytes();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'");self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
         elif self.path=='/health': self.send_json(200,{'model':'qwen3.5:4b','local':True,'busy':LOCK.locked(),'voice':True,'document_formats':['txt','md','pdf','docx']})
+        elif self.path=='/api/metrics': self.send_json(200,system_metrics())
         elif self.path=='/chat.js':
             data=(ROOT/'chat.js').read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
         elif self.path=='/api/agent/status':
             task_id=query.get('id',[''])[0]
-            with TASKS_LOCK: status=TASKS.get(task_id)
+            with TASKS_LOCK: status=dict(TASKS.get(task_id) or {})
             if not status: return self.send_json(404,{'error':'Task status not found'})
+            if status.get('started_at'): status['elapsed_seconds']=round(time.time()-status['started_at'],1)
             self.send_json(200,status)
         else: self.send_json(404,{'error':'Not found'})
     def do_POST(self):
         if not self.allowed() or not self.authorized(): return self.send_json(403,{'error':'This frontend is not paired with the local agent'})
-        if self.path not in {'/api/chat','/api/document','/api/agent','/api/transcribe','/api/speak'}: return self.send_json(404,{'error':'Not found'})
+        if self.path not in {'/api/chat','/api/document','/api/agent','/api/agent/control','/api/transcribe','/api/speak'}: return self.send_json(404,{'error':'Not found'})
+        if self.path=='/api/agent/control':
+            try:
+                length=int(self.headers.get('Content-Length','0'));body=json.loads(self.rfile.read(length))
+                return self.send_json(200,control_task(str(body.get('task_id','')),str(body.get('action',''))))
+            except Exception as error:return self.send_json(400,{'error':str(error)})
         if self.path=='/api/document':
             try:
                 self.connection.settimeout(15)
@@ -148,7 +194,8 @@ class Handler(BaseHTTPRequestHandler):
                 env=dict(os.environ,OPENCLAW_STATE_DIR=str(base/'state'))
                 session='web-'+uuid.uuid4().hex
                 if not isinstance(task_id,str) or not 8<=len(task_id)<=80: task_id=uuid.uuid4().hex
-                with TASKS_LOCK: TASKS[task_id]={'status':'Planning the task locally…','done':False}
+                started=time.time()
+                with TASKS_LOCK: TASKS[task_id]={'status':'Planning the task locally…','step':'Planning','active_tool':'Qwen + OpenClaw','done':False,'started_at':started}
                 task=messages[-1]['content']
                 if 'news' in task.lower() and ('india' in task.lower() or 'newspaper' in task.lower()):
                     task='Call news_digest exactly once and summarize only its returned results. Include publisher, headline, visible time when present, and whether no usable headline was exposed. A loaded page with accessible false means no usable headline was extracted, not necessarily that the website was inaccessible. Do not call browser separately. Original task: '+task
@@ -162,9 +209,24 @@ class Handler(BaseHTTPRequestHandler):
                 action_log=base/'workstation-actions.jsonl';offset=action_log.stat().st_size if action_log.exists() else 0
                 with tempfile.TemporaryFile(mode='w+',encoding='utf-8',errors='replace') as stdout, tempfile.TemporaryFile(mode='w+',encoding='utf-8',errors='replace') as stderr:
                     proc=subprocess.Popen(command,env=env,cwd=base,stdout=stdout,stderr=stderr,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
+                    with TASKS_LOCK: TASK_PROCS[task_id]=proc
                     deadline=time.monotonic()+200
+                    high_cpu_since=None
                     while proc.poll() is None:
                         if time.monotonic()>deadline: proc.kill();raise TimeoutError('Agent exceeded 200 seconds')
+                        with TASKS_LOCK: current=dict(TASKS.get(task_id) or {})
+                        if current.get('stopped'): raise RuntimeError('Task stopped by user')
+                        if not current.get('paused'):
+                            metrics=system_metrics()
+                            over_hard_limit=metrics['ram_percent']>=95 or (metrics['gpu_used_mb'] is not None and metrics['gpu_used_mb']>7168)
+                            if metrics['cpu_percent']>=98: high_cpu_since=high_cpu_since or time.monotonic()
+                            else: high_cpu_since=None
+                            if over_hard_limit or (high_cpu_since and time.monotonic()-high_cpu_since>=10):
+                                for item in reversed(process_tree(proc)):
+                                    try:item.terminate()
+                                    except Exception:pass
+                                with TASKS_LOCK: TASKS[task_id].update(status='Stopped by resource safety limit',step='Safety stop',active_tool='None',done=True,stopped=True)
+                                raise RuntimeError('Task stopped because the PC resource safety limit was reached')
                         if action_log.exists() and action_log.stat().st_size>offset:
                             with action_log.open('r',encoding='utf-8',errors='replace') as log:
                                 log.seek(offset)
@@ -174,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                                         tool=event.get('tool');call=event.get('call')
                                         label={'browser':'Working in visible Chrome','workstation':'Working with project files or code','desktop':'Controlling VS Code or Notepad','news_digest':'Checking verified news sites'}.get(tool)
                                         if label:
-                                            with TASKS_LOCK: TASKS[task_id]={'status':label+(f' · action {call}' if call else ''),'done':False}
+                                            with TASKS_LOCK: TASKS[task_id]={'status':label+(f' · action {call}' if call else ''),'step':label,'active_tool':tool,'action':call,'done':False,'started_at':started}
                                     except Exception: pass
                                 offset=log.tell()
                         time.sleep(.35)
@@ -185,13 +247,15 @@ class Handler(BaseHTTPRequestHandler):
                 (base/'web-task-results'/f'{session}.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
                 text='\n'.join(x.get('text','') for x in result.get('result',{}).get('payloads',[]))
                 if result.get('status')!='ok': return self.send_json(502,{'error':text or 'Agent failed; check the local action logs.'})
-                with TASKS_LOCK: TASKS[task_id]={'status':'Task complete','done':True}
+                with TASKS_LOCK: TASKS[task_id]={'status':'Task complete','step':'Complete','active_tool':'None','done':True,'started_at':started,'elapsed_seconds':round(time.time()-started,1)}
                 return self.send_json(200,{'content':text,'session':session,'done':True})
             except Exception as error:
                 if 'task_id' in locals():
                     with TASKS_LOCK: TASKS[task_id]={'status':'Task stopped with an error','done':True}
                 return self.send_json(502,{'error':'Local agent failed or timed out: '+str(error)[:300]})
             finally:
+                if 'task_id' in locals():
+                    with TASKS_LOCK: TASK_PROCS.pop(task_id,None)
                 if 'task_config' in locals(): task_config.unlink(missing_ok=True)
                 LOCK.release()
         if not LOCK.acquire(False): return self.send_json(429,{'error':'Qwen is busy. Wait for the current answer.'})

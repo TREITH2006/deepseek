@@ -1,5 +1,5 @@
 """Bounded visible Windows application control for locally generated work. MIT."""
-import ctypes, json, os, psutil, sys, time
+import ctypes, json, os, pathlib, psutil, subprocess, sys, time
 from ctypes import wintypes
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
@@ -42,13 +42,10 @@ def controls(w):
         except Exception: pass
     return items
 
-def move_pointer(rect):
+def show_agent_pointer(rect):
     target=(int((rect.left+rect.right)/2),int((rect.top+rect.bottom)/2))
-    point=wintypes.POINT();user32=ctypes.windll.user32;user32.GetCursorPos(ctypes.byref(point));start=(point.x,point.y)
-    for step in range(1,46):
-        t=step/45;t=t*t*(3-2*t)
-        user32.SetCursorPos(round(start[0]+(target[0]-start[0])*t),round(start[1]+(target[1]-start[1])*t));time.sleep(.02)
-    time.sleep(.25)
+    helper=pathlib.Path(__file__).with_name('agent_pointer.py')
+    subprocess.Popen([sys.executable,str(helper)],stdin=subprocess.PIPE,text=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)).communicate(json.dumps({'x':target[0],'y':target[1]}),timeout=3)
 
 if action=='list_windows':
     result={'windows':[{'title':title,'process':proc} for _,proc,title in windows()]}
@@ -61,8 +58,10 @@ elif action in {'click_control','type_text'}:
     if not isinstance(index,int) or index<0 or index>=len(items): raise ValueError('Use a control_index returned by inspect')
     control,meta=items[index]
     if any(word in (title+' '+meta['name']).lower() for word in BLOCKED_WORDS): raise ValueError('Sensitive or credential control is blocked')
-    move_pointer(control.rectangle())
-    control.click_input();time.sleep(.25)
+    show_agent_pointer(control.rectangle())
+    try: control.invoke()
+    except Exception: control.click()
+    time.sleep(.25)
     if action=='type_text':
         text=args.get('text','')
         if not isinstance(text,str) or len(text)>4000: raise ValueError('Text must be at most 4000 characters')
