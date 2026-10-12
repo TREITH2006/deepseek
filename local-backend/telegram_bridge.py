@@ -5,6 +5,7 @@ ROOT=pathlib.Path(__file__).resolve().parent
 TOKEN=(ROOT/'telegram-token.txt').read_text(encoding='utf-8').strip()
 CHAT_ID=(ROOT/'telegram-chat-id.txt').read_text(encoding='utf-8').strip()
 OFFSET_FILE=ROOT/'telegram-offset.txt'
+MODE_FILE=ROOT/'telegram-mode.txt'
 API=f'https://api.telegram.org/bot{TOKEN}/'
 _getaddrinfo=socket.getaddrinfo
 def _ipv4_only(host,port,*args,**kwargs):
@@ -15,8 +16,21 @@ socket.getaddrinfo=_ipv4_only
 def telegram(method,data=None,timeout=70):
     body=urllib.parse.urlencode(data or {}).encode()
     with urllib.request.urlopen(urllib.request.Request(API+method,data=body),timeout=timeout) as response:return json.load(response)
-def send(text):
-    for chunk in (text[i:i+3900] for i in range(0,len(text),3900)): telegram('sendMessage',{'chat_id':CHAT_ID,'text':chunk})
+def send(text,menu=False):
+    for chunk in (text[i:i+3900] for i in range(0,len(text),3900)):
+        data={'chat_id':CHAT_ID,'text':chunk}
+        if menu:data['reply_markup']=json.dumps({'keyboard':[['💬 Chat','🛠 Task']], 'resize_keyboard':True,'one_time_keyboard':False})
+        telegram('sendMessage',data)
+def run_chat(message):
+    payload=json.dumps({'messages':[{'role':'user','content':message}]}).encode()
+    request=urllib.request.Request('http://127.0.0.1:8765/api/chat',data=payload,headers={'Content-Type':'application/json'})
+    content=''
+    with urllib.request.urlopen(request,timeout=190) as response:
+        for line in response:
+            event=json.loads(line)
+            if event.get('error'):raise RuntimeError(event['error'])
+            content+=event.get('content','')
+    return content.strip() or 'Qwen returned no answer.'
 def run_agent(task):
     payload=json.dumps({'task_id':uuid.uuid4().hex,'messages':[{'role':'user','content':task}]}).encode()
     request=urllib.request.Request('http://127.0.0.1:8765/api/agent',data=payload,headers={'Content-Type':'application/json'})
@@ -74,13 +88,23 @@ def main():
                 task=(message.get('text') or '').strip()
                 if not task:send('Send a text task. Voice notes are not enabled in this bridge yet.');continue
                 if task.lower()=='/start':
-                    send('Local PC agent is connected. Send a task in plain language. Coding tasks return a summary, PDF report, and ZIP of created or changed files.')
+                    send('Local PC agent is connected. Choose Chat for questions or Task for PC actions.',menu=True)
                     continue
+                if task in {'💬 Chat','Chat'}:
+                    MODE_FILE.write_text('chat',encoding='utf-8');send('Chat mode selected. Your next messages will be answered by local Qwen without controlling the PC.',menu=True);continue
+                if task in {'🛠 Task','Task'}:
+                    MODE_FILE.write_text('task',encoding='utf-8');send('Task mode selected. Your next messages will run through local OpenClaw on this PC.',menu=True);continue
                 if task.lower()=='/status':
                     try:
                         with urllib.request.urlopen('http://127.0.0.1:8765/api/metrics',timeout=5) as response:metrics=json.load(response)
                         send(f"Local backend: {metrics['backend']}. CPU {metrics['cpu_percent']}%, RAM {metrics['ram_percent']}%, GPU memory {metrics.get('gpu_used_mb')} MB.")
                     except Exception:send('The local backend is not reachable. Start the local agent on the PC.')
+                    continue
+                mode=MODE_FILE.read_text(encoding='utf-8').strip() if MODE_FILE.exists() else 'task'
+                if mode=='chat':
+                    send('Qwen is answering locally…')
+                    try:send(run_chat(task))
+                    except Exception as error:send('Local chat failed: '+str(error)[:500])
                     continue
                 send('Task accepted by the local agent. I will send the verified result when it finishes.')
                 try:
