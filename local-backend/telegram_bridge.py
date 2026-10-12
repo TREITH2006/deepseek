@@ -1,5 +1,5 @@
 """Local Telegram-to-OpenClaw bridge. Secrets remain in local files. MIT."""
-import json, pathlib, socket, textwrap, time, urllib.parse, urllib.request, uuid, zipfile
+import json, pathlib, socket, textwrap, time, urllib.error, urllib.parse, urllib.request, uuid, zipfile
 
 ROOT=pathlib.Path(__file__).resolve().parent
 TOKEN=(ROOT/'telegram-token.txt').read_text(encoding='utf-8').strip()
@@ -23,14 +23,20 @@ def send(text,menu=False):
         telegram('sendMessage',data)
 def run_chat(message):
     payload=json.dumps({'messages':[{'role':'user','content':message}]}).encode()
-    request=urllib.request.Request('http://127.0.0.1:8765/api/chat',data=payload,headers={'Content-Type':'application/json'})
-    content=''
-    with urllib.request.urlopen(request,timeout=190) as response:
-        for line in response:
-            event=json.loads(line)
-            if event.get('error'):raise RuntimeError(event['error'])
-            content+=event.get('content','')
-    return content.strip() or 'Qwen returned no answer.'
+    deadline=time.monotonic()+90
+    while True:
+        request=urllib.request.Request('http://127.0.0.1:8765/api/chat',data=payload,headers={'Content-Type':'application/json'})
+        content=''
+        try:
+            with urllib.request.urlopen(request,timeout=190) as response:
+                for line in response:
+                    event=json.loads(line)
+                    if event.get('error'):raise RuntimeError(event['error'])
+                    content+=event.get('content','')
+            return content.strip() or 'Qwen returned no answer.'
+        except urllib.error.HTTPError as error:
+            if error.code!=429 or time.monotonic()>=deadline:raise RuntimeError('The local agent is still busy. Please retry after the current task finishes.')
+            time.sleep(3)
 def run_agent(task):
     payload=json.dumps({'task_id':uuid.uuid4().hex,'messages':[{'role':'user','content':task}]}).encode()
     request=urllib.request.Request('http://127.0.0.1:8765/api/agent',data=payload,headers={'Content-Type':'application/json'})
