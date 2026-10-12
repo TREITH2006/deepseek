@@ -1,0 +1,15 @@
+pairing-token.txt
+.venv/
+venv/
+node_modules/
+models/
+state/browser/
+state/tmp/
+*.log
+*.jsonl
+web-task-results/
+workspace/tasks/
+
+__pycache__/
+*.pyc
+deepseek/
