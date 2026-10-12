@@ -17,8 +17,13 @@ catch {
   if(-not $ready){throw 'Chat did not start; see local-agent/chat.err.log.'}
 }
 if((Test-Path (Join-Path $chat 'telegram-token.txt')) -and (Test-Path (Join-Path $chat 'telegram-chat-id.txt'))){
-  $bridge=Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -like '*telegram_bridge.py*'}
-  if(-not $bridge){Start-Process (Join-Path $chat 'standalone-venv\Scripts\python.exe') -ArgumentList (Join-Path $chat 'telegram_bridge.py') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $chat 'telegram.out.log') -RedirectStandardError (Join-Path $chat 'telegram.err.log')}
+  $bridge=@(Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'python.exe' -and $_.CommandLine -like '*telegram_bridge.py*'})
+  $bridgeIds=@($bridge.ProcessId)
+  $bridgeRoots=@($bridge | Where-Object {$_.ParentProcessId -notin $bridgeIds})
+  if($bridgeRoots.Count -ne 1){
+    foreach($process in $bridge){Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue}
+    Start-Process (Join-Path $chat 'standalone-venv\Scripts\python.exe') -ArgumentList (Join-Path $chat 'telegram_bridge.py') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $chat 'telegram.out.log') -RedirectStandardError (Join-Path $chat 'telegram.err.log')
+  }
 }
 Start-Process 'http://127.0.0.1:8765/'
 Write-Host 'Local agent ready. Choose Agent mode on the page. Use Stop-Local-Agent.cmd to stop the setup.'
